@@ -1,0 +1,12 @@
+{
+  "Operator Misuse": "",
+  "Limit Error": "",
+  "Join Logic Hallucination": "",
+  "Violating Value Specification": "",
+  "Column Selection Error": "",
+  "Condition Logic Hallucination": "",
+  "Aggregation Function Misuse": "",
+  "Distinct Error": "",
+  "OrderBy Misuse": "",
+  "GroupBy Misuse": ""
+}

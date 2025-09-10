@@ -1,0 +1,6 @@
+{
+  "model_name": "qwen2.5-coder:14b",
+  "llm_type": "local",
+  "url": "http://localhost:11436/api/chat",
+  "stream": false
+}

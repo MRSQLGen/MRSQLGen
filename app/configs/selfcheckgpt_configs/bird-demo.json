@@ -1,0 +1,7 @@
+{
+  "selfcheckgpt_model": "nli",
+  "n": 10,
+  "origin_temperature": 0.0,
+  "check_temperature": 1.0,
+  "threshold": 0.5
+}

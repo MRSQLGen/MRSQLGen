@@ -1,0 +1,8 @@
+{
+  "temperature" : 0.0,
+  "n" : 10,
+  "threshold_cross_validation" : 0.8,
+  "top_match_k" : 10,
+  "threshold_similarity" : 0.75,
+  "ablation" : false
+}
