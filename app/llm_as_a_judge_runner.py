@@ -1,6 +1,6 @@
 import shutil
 from typing import Tuple, List
-
+import time
 from app.gpt_client import GPTClient
 from app.DAIL_SQL_Prompt.PromptReprTemplate import NumberSignCOTPrompt
 from app.sql_generator import DefaultSQLGenerator
@@ -15,22 +15,33 @@ import json
 class LLM_As_A_Judge_Runner:
     def __init__(
         self,
-        llm_model_config_file: str,
+        test_llm_model_config_file: str,
+        judge_llm_model_config_file: str,
         runner_config_file: str,
         sql_type: str = "SELECT",
         strict: bool = True
     ):
-        if not os.path.exists(llm_model_config_file):
-            print(f"{llm_model_config_file} doesn't exist.")
+        if not os.path.exists(test_llm_model_config_file):
+            print(f"{test_llm_model_config_file} doesn't exist.")
             return
-        with open(llm_model_config_file, "r", encoding="utf-8") as r:
-            llm_model_config = json.load(r)
-        os.environ["OPENAI_API_KEY"] = llm_model_config.get('api_key', '')
-        os.environ["OPENAI_API_BASE"] = llm_model_config.get('api_base', '')
-        self.model_name = llm_model_config.get('model_name', 'gpt-4o-mini')
-        self.llm_type = llm_model_config.get('llm_type', 'general-purpose')
-        self.url = llm_model_config.get('url', '')
-        self.stream = llm_model_config.get('stream', '')
+        if not os.path.exists(judge_llm_model_config_file):
+            print(f"{judge_llm_model_config_file} doesn't exist.")
+            return
+
+        with open(test_llm_model_config_file, "r", encoding="utf-8") as r:
+            test_llm_model_config = json.load(r)
+
+        self.test_model_name = test_llm_model_config.get('model_name', 'gpt-4o-mini')
+        self.test_llm_type = test_llm_model_config.get('llm_type', 'general-purpose')
+        self.test_url = test_llm_model_config.get('url', '')
+        self.test_stream = test_llm_model_config.get('stream', '')
+
+        with open(judge_llm_model_config_file, "r", encoding="utf-8") as r:
+            judge_llm_model_config = json.load(r)
+        self.judge_model_name = judge_llm_model_config.get('model_name', 'gpt-4o-mini')
+        self.judge_llm_type = judge_llm_model_config.get('llm_type', 'general-purpose')
+        self.judge_url = judge_llm_model_config.get('url', '')
+        self.judge_stream = judge_llm_model_config.get('stream', '')
 
 
         if not os.path.exists(runner_config_file):
@@ -39,56 +50,70 @@ class LLM_As_A_Judge_Runner:
         with open(runner_config_file, "r", encoding="utf-8") as r:
             runner_config = json.load(r)
 
-        self.temperature = runner_config.get('temperature',0.0)
+        self.test_temperature = runner_config.get('test_temperature',0.0)
+        self.judge_temperature = runner_config.get('judge_temperature',0.0)
         self.sql_type = sql_type.upper()
         self.strict = strict
         self.llm_judge = LLMAsAJudgeCaller()
 
-
-    def model_wrapper(self, prompt: str):
-        gpt_client = GPTClient(
-            model_name=self.model_name,
-            llm_type=self.llm_type,
-            temperature=self.temperature,
+        # 0.75s: gpt = GPTClient
+        os.environ["OPENAI_API_KEY"] = test_llm_model_config.get('api_key', '')
+        os.environ["OPENAI_API_BASE"] = test_llm_model_config.get('api_base', '')
+        self.gpt_generating_component = GPTClient(
+            model_name=self.test_model_name,
+            llm_type=self.test_llm_type,
+            temperature= self.test_temperature,
             api_key=os.getenv("OPENAI_API_KEY"),
             api_base=os.getenv("OPENAI_API_BASE"),
-            url=self.url,
-            stream=self.stream
+            url=self.test_url,
+            stream=self.test_stream
         )
 
+        os.environ["OPENAI_API_KEY"] = judge_llm_model_config.get('api_key', '')
+        os.environ["OPENAI_API_BASE"] = judge_llm_model_config.get('api_base', '')
+        self.gpt_model_wrapper = GPTClient(
+            model_name=self.judge_model_name,
+            llm_type=self.judge_llm_type,
+            temperature=self.judge_temperature,
+            api_key=os.getenv("OPENAI_API_KEY"),
+            api_base=os.getenv("OPENAI_API_BASE"),
+            url=self.judge_url,
+            stream=self.judge_stream
+        )
+
+    def model_wrapper(self, prompt: str):
         formatted_prompt = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
         ]
 
-        response, usage = gpt_client.generate(formatted_prompt)
+        response, usage = self.gpt_model_wrapper.generate(formatted_prompt)
+        print(self.gpt_model_wrapper.model_name)
 
         return response, usage
 
     def run(self, input_json_path: str, dataset_name:str, dataset_path: str, output_dic_path: str, num_examples: int):
-        output_dic_path = os.path.join(output_dic_path, f"llm_as_a_judge_{dataset_name}_{self.model_name.replace(':', '-')}")
+        output_dic_path = os.path.join(output_dic_path, f"llm_as_a_judge_{dataset_name}_{self.test_model_name.replace(':', '-')}_{self.judge_model_name.replace(':', '-')}")
         os.makedirs(output_dic_path, exist_ok=True)
         if not os.path.exists(input_json_path):
             return
 
-        # 0. ，
         with open(os.path.join(output_dic_path, "config.json"), "w", encoding="utf-8") as w:
             config = {
-                "model_name": self.model_name,
-                "temperature": self.temperature,
+                "test_model_name": self.test_model_name,
+                "test_temperature": self.test_temperature,
+                "judge_model_name": self.judge_model_name,
+                "judge_temperature": self.judge_temperature,
                 "input_json_path": input_json_path,
                 "output_dic_path": output_dic_path,
                 "num_examples": num_examples
             }
             json.dump(config, w, indent=4)
 
-        #
         with open(input_json_path, "r", encoding="utf-8") as r:
             contents = json.load(r)
 
-        # 2.
         for i, item in enumerate(contents[:num_examples]):
-            #
             index_dic_path = os.path.join(output_dic_path, str(item["index"]))
             if os.path.exists(os.path.join(index_dic_path, "pred_real.json")):
                 continue
@@ -104,8 +129,40 @@ class LLM_As_A_Judge_Runner:
 
             try:
                 #  LLM  SQL
-                generated_sql, origin_gene_usage, target_result = self.generating_component(item, table_schema_dic,dataset_path, self.temperature)
-                #  Judge  +
+                if not os.path.exists(os.path.join(index_dic_path, "origin_generate.json")):
+                    generated_sql, origin_gene_usage, target_result = self.generating_component(item, table_schema_dic,dataset_path, self.test_temperature)
+
+                    # 5. Execute ground truth
+                    ground_result = self.execute_ground_truth(item, table_schema_dic, dataset_path)
+                    # 6. Compare target with ground truth
+
+                    checker = get_mr_checker_by_sql_type(
+                        hallu_type="basic",
+                        sqlite_exec_one=target_result,
+                        sqlite_exec_two=ground_result,
+                        sql_type=self.sql_type
+                    )
+                    real_flag = not checker.check(mode="equivalent", strict=self.strict)  # ：
+
+                    ##  Generate for original prompt
+                    target_result, target_rowcount, target_err = target_result
+                    TargetResult_json = {"result": str(target_result), "rowcount": target_rowcount, "err": target_err}
+                    ground_result, ground_rowcount, ground_err = ground_result
+                    GroundResult_json = {"result": str(ground_result), "rowcount": ground_rowcount, "err": ground_err}
+                    with open(os.path.join(index_dic_path, "origin_generate.json"), "w", encoding="utf-8") as w:
+                        json.dump({"TargetQuery": generated_sql, "usage": origin_gene_usage,
+                                   "TargetResult": TargetResult_json,
+                                   "GroundQuery": gold_sql, "GroundResult": GroundResult_json, "real": real_flag}, w,
+                                  indent=4)
+                else:
+                    with open(os.path.join(index_dic_path, "origin_generate.json"), "r", encoding="utf-8") as r:
+                        temp = json.load(r)
+                        generated_sql = temp["TargetQuery"]
+                        real_flag = temp["real"]
+
+
+                start = time.perf_counter() # start llm-as-a-judge,start
+
                 result = self.llm_judge.get_predict_type(
                     question=item['question'],
                     generated_sql=generated_sql,
@@ -113,43 +170,58 @@ class LLM_As_A_Judge_Runner:
                     model=self.model_wrapper,
                 )
                 pred_flag = result.get('pred', True)
-
-                # 5. Execute ground truth
-                ground_result = self.execute_ground_truth(item, table_schema_dic, dataset_path)
-
-                # 6. Compare target with ground truth
-                checker = get_mr_checker_by_sql_type(
-                    hallu_type="basic",
-                    sqlite_exec_one=target_result,
-                    sqlite_exec_two=ground_result,
-                    sql_type=self.sql_type
-                )
-                real_flag = not checker.check(mode="equivalent", strict=self.strict)  # ：
-
-                # 7.
-                ##
-                with open(os.path.join(index_dic_path, "input.json"), "w", encoding="utf-8") as w:
-                    json.dump(item, w, indent=4)
-                ##  Generate for original prompt
-                target_result, target_rowcount, target_err = target_result
-                TargetResult_json = {"result": str(target_result), "rowcount": target_rowcount, "err": target_err}
-                ground_result, ground_rowcount, ground_err = ground_result
-                GroundResult_json = {"result": str(ground_result), "rowcount": ground_rowcount, "err": ground_err}
-                with open(os.path.join(index_dic_path, "origin_generate.json"), "w", encoding="utf-8") as w:
-                    json.dump({"TargetQuery": generated_sql, "usage": origin_gene_usage, "TargetResult": TargetResult_json,
-                               "GroundQuery": gold_sql,"GroundResult": GroundResult_json, "real": real_flag}, w, indent=4)
                 ## 3. Generate for metamorphic prompts ,# 4. Detect hallucination
                 with open(os.path.join(index_dic_path, "check_generate.json"), "w", encoding="utf-8") as w:
                     json.dump(result, w, indent=4)
+
+                end = time.perf_counter() # get the pred_flag, end
+
+
+
+                with open(os.path.join(index_dic_path, "input.json"), "w", encoding="utf-8") as w:
+                    json.dump(item, w, indent=4)
+
+
                 ## (pred,real)
                 with open(os.path.join(index_dic_path, "pred_real.json"), "w", encoding="utf-8") as w:
-                    json.dump(
-                        {"pred_flag": pred_flag, "real_flag": real_flag}, w, indent=4)
+                    json.dump({"pred_flag": pred_flag, "real_flag": real_flag}, w, indent=4)
+                ## time
+                if not os.path.exists(os.path.join(index_dic_path, "time.json")):
+                    with open(os.path.join(index_dic_path, "time.json"), "w", encoding="utf-8") as w:
+                        json.dump({"time": (end - start)*10}, w, indent=4)
             except Exception as e:
                 print(f" Error at example {i}: {e}")
                 continue
 
             print(f"End Process：{str(index)}")
+
+        # token cost
+        token_cnt_total = []
+        for i, item in enumerate(contents[:num_examples]):
+            token_cnt_temp = 0
+            index_dic_path = os.path.join(output_dic_path, str(item["index"]))
+            with open(os.path.join(index_dic_path, "origin_generate.json"), "r", encoding="utf-8") as r:
+                origin_generate_temp = json.load(r)
+            token_cnt_temp += origin_generate_temp["usage"][2]
+
+            with open(os.path.join(index_dic_path, "check_generate.json"), "r", encoding="utf-8") as r:
+                check_generate_temp = json.load(r)
+            token_cnt_temp = token_cnt_temp + check_generate_temp["usage"][2]*10
+            token_cnt_total.append(token_cnt_temp)
+
+        with open(os.path.join(output_dic_path,"token_cost.json"),"w", encoding="utf-8") as w:
+            json.dump({"token_list": token_cnt_total, "average_token": sum(token_cnt_total)/num_examples},w,indent=4)
+
+        # time cost
+        # time_total = []
+        # for i, item in enumerate(contents[:num_examples]):
+        #     index_dic_path = os.path.join(output_dic_path, str(item["index"]))
+        #     with open(os.path.join(index_dic_path, "time.json"), "r", encoding="utf-8") as r:
+        #         time_temp = json.load(r)
+        #     time_total.append(time_temp["time"])
+        # with open(os.path.join(output_dic_path,"time_cost.json"),"w", encoding="utf-8") as w:
+        #     json.dump({"time_list": time_total, "average_token": sum(time_total)/num_examples},w,indent=4)
+
 
         # "pred_real.json"，
         pred_real_list = []
@@ -184,19 +256,12 @@ class LLM_As_A_Judge_Runner:
         shutil.copy(origin_db_path, target_folder)
         db_path = os.path.join(target_folder, f"{db_id}.sqlite")
 
-        gpt = GPTClient(
-            model_name=self.model_name,
-            llm_type=self.llm_type,
-            temperature=temperature_,
-            api_key=os.getenv("OPENAI_API_KEY"),
-            api_base=os.getenv("OPENAI_API_BASE"),
-            url=self.url,
-            stream=self.stream
-        )
         db = SqliteConnector(db_path=db_path)
         prompt_generator = NumberSignCOTPrompt()
-        sql_gen = DefaultSQLGenerator(llm_client=gpt, db_connector=db, prompt_generator=prompt_generator, metadata=content)
+        sql_gen = DefaultSQLGenerator(llm_client=self.gpt_generating_component, db_connector=db, prompt_generator=prompt_generator, metadata=content)
         sql_gen.prompt_messages_construct()
+
+        print(self.gpt_generating_component.model_name)
         query, usage = sql_gen.generate_target_query()
         result, rowcount, err = sql_gen.execute_target_query()
         db.close()

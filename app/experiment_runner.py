@@ -15,7 +15,7 @@ from app.MR_checker.MRChecker_factory import get_mr_checker_by_sql_type
 from app.hallucination_type_retrieval.hallucination_type_identify import HallucinationTypeIdentify
 from app.hallucination_type_retrieval.question_normalization import QuestionNormalization
 from app.hallucination_type_retrieval.sql_normalization import SQLNormalization
-
+import time
 current_file_path = os.path.abspath(__file__)
 current_dir = os.path.dirname(current_file_path)
 
@@ -57,13 +57,35 @@ class ExperimentRunner:
         self.hkb_path = os.path.join(current_dir, "..", "HallucinationKnowledgeBaseMerge", "merge_hkb_whole.json")
         self.hkb_cache_path = os.path.join(current_dir, "..", "HallucinationKnowledgeBaseMerge","merge_hkb_whole_cache.npy")
 
+        # 0.75s: gpt = GPTClient
+        self.gpt_generating_component = GPTClient(
+            model_name=self.model_name,
+            llm_type=self.llm_type,
+            temperature= self.temperature,
+            api_key=os.getenv("OPENAI_API_KEY"),
+            api_base=os.getenv("OPENAI_API_BASE"),
+            url=self.url,
+            stream=self.stream
+        )
+
+        self.gpt_prompt_paraphasing = GPTClient(
+            model_name=self.model_name,
+            llm_type=self.llm_type,
+            temperature=self.temperature,
+            api_key=os.getenv("OPENAI_API_KEY"),
+            api_base=os.getenv("OPENAI_API_BASE"),
+            url=self.url,
+            stream=self.stream
+        )
+
     def run(self, input_json_path: str, dataset_name: str,dataset_dic:str, output_dic_path: str, item_num: int = 5):
         output_dic_path = os.path.join(output_dic_path, f"mr-sqlgen_{dataset_name}_{self.model_name.replace(':', '-')}")
         os.makedirs(output_dic_path, exist_ok=True)
         if not os.path.exists(input_json_path):
             return
 
-        # 0. ，
+        token_cnt_total = []
+
         with open(os.path.join(output_dic_path,"config.json"),"w", encoding="utf-8") as w:
             config = {
                 "model_name": self.model_name,
@@ -135,10 +157,14 @@ class ExperimentRunner:
             if len(TargetResult_json["err"]) != 0: # err，，
                 with open(os.path.join(index_dic_path, "pred_real.json"), "w", encoding="utf-8") as w:
                     json.dump({"pred_flag": True, "real_flag": real_flag, "basic": {"pred": False}}, w, indent=4)
+                ## time
+                with open(os.path.join(index_dic_path, "time.json"), "w", encoding="utf-8") as w:
+                    json.dump({"time": [0]}, w, indent=4)
                 self.update_chunk_pred_flag(index_dic_path, types_identify_qmr)
                 self.update_whole_pred_flag(index_dic_path, types_identify_qmr)
                 continue
 
+            start = time.perf_counter()  # start
             # 0. Hallucination Type Identify
             types_identify_json = os.path.join(index_dic_path, "type_identify.json")
             if not os.path.exists(types_identify_json):
@@ -156,10 +182,8 @@ class ExperimentRunner:
                     json.dump(hkb_whole,w,indent=4)
 
                 ## Hallucination Type Identify
-
                 types_retrieval, types_identify = matcher.type_identify_whole(normalized_question, normalized_query,
                                                                               self.top_match_k, self.threshold_similarity)
-
                 # type，(pred,real)
                 pred_real = {}
                 for key, value in node_type.items():
@@ -185,13 +209,8 @@ class ExperimentRunner:
                 types_identify_qmr[f"QMR-4-{hallu_type}"] = flag
 
             for idx, (hallu_type, flag) in enumerate(types_identify_qmr.items()):
-                #
                 if not flag:
                     continue
-
-                # if "QMR-4" in hallu_type:
-                #     shutil.rmtree(os.path.join(index_dic_path, hallu_type))
-
                 hallu_dic = hallu_type
                 os.makedirs(os.path.join(index_dic_path, hallu_dic), exist_ok=True)
 
@@ -236,12 +255,47 @@ class ExperimentRunner:
                     with open(paraphrasing_generate_json, "w",encoding="utf-8") as w:
                         json.dump(mutant_records, w, indent=4)
 
+            end = time.perf_counter()
+            ## time
+            if not os.path.exists(os.path.join(index_dic_path, "time.json")):
+                with open(os.path.join(index_dic_path, "time.json"), "w", encoding="utf-8") as w:
+                    json.dump({"time": [end-start]}, w, indent=4)
+
             # chunk:  hallu_type  QMR1-QMR4   [，，MR relation]
-            self.update_chunk_pred_flag(index_dic_path, types_identify_qmr)
+            token_cnt_temp = self.update_chunk_pred_flag(index_dic_path, types_identify_qmr)
+            token_cnt_total.append(token_cnt_temp)
             # whole:  hallu_type  QMR1-QMR4   [，，MR relation]
             self.update_whole_pred_flag(index_dic_path, types_identify_qmr)
 
             print(f"End Process：{str(content['index'])}")
+
+        # prompt count
+        prompt_cnt_total = []
+        for i, item in enumerate(contents[:item_num]):
+            index_dic_path = os.path.join(output_dic_path, str(item["index"]))
+            with open(os.path.join(index_dic_path, "pred_real.json"), "r", encoding="utf-8") as r:
+                pred_real_temp = json.load(r)
+            cnt_temp = 0
+            for key,value in pred_real_temp.items():
+                if type(value) == dict:
+                    cnt_temp += value["total"]
+            prompt_cnt_total.append(cnt_temp)
+        with open(os.path.join(output_dic_path,"prompt_count.json"),"w", encoding="utf-8") as w:
+            json.dump({"prompt_count_list": prompt_cnt_total, "average_prompt_count": sum(prompt_cnt_total)/item_num},w,indent=4)
+
+        # token cost
+        with open(os.path.join(output_dic_path,"token_cost.json"),"w", encoding="utf-8") as w:
+            json.dump({"token_list": token_cnt_total, "average_token": sum(token_cnt_total)/item_num},w,indent=4)
+
+        # time cost
+        time_total = []
+        for i, item in enumerate(contents[:item_num]):
+            index_dic_path = os.path.join(output_dic_path, str(item["index"]))
+            with open(os.path.join(index_dic_path, "time.json"), "r", encoding="utf-8") as r:
+                time_temp = json.load(r)
+            time_total.append(sum(time_temp["time"]))
+        with open(os.path.join(output_dic_path,"time_cost.json"),"w", encoding="utf-8") as w:
+            json.dump({"time_list": time_total, "average_token": sum(time_total)/item_num},w,indent=4)
 
 
         #  Hallucination Type Identify
@@ -344,22 +398,20 @@ class ExperimentRunner:
 
 
     def update_chunk_pred_flag(self, index_dic_path, types_identify_qmr):
-        # chunk:  hallu_type  QMR1-QMR4   [，，MR relation]
-
+        token_cnt = 0
         #  origin_generate  TargetQuery
         with open(os.path.join(index_dic_path, "origin_generate.json"), "r", encoding="utf-8") as r:
             temp = json.load(r)
             real_flag = temp["real"]
+            token_cnt += temp["usage"][2] # token count
             if len(temp["TargetResult"]["err"]) != 0:  # err，
-                print(index_dic_path)
                 pred_real_content = {"pred_flag": True, "real_flag": True}
                 with open(os.path.join(index_dic_path, "pred_real.json"), "w", encoding="utf-8") as w:
                     json.dump(pred_real_content, w, indent=4)
-                return
+                return token_cnt
 
         pred_real_content = {"pred_flag": False, "real_flag": real_flag}
         for idx, (hallu_type, flag) in enumerate(types_identify_qmr.items()):
-            #
             if not flag:
                 continue
 
@@ -372,9 +424,10 @@ class ExperimentRunner:
                 qmr_name = "-".join(parts[:2])
                 hallu_type_name = parts[2]
 
-            # # qmr
-            # if qmr_name in ["QMR-4"]:
-            #     continue
+            # token count
+            with open(os.path.join(index_dic_path, hallu_dic, "prompt_paraphrasing.json"), "r",encoding="utf-8") as r:
+                prompt_paraphrasing_list = json.load(r)
+            token_cnt += prompt_paraphrasing_list["usage"][2]
 
             with open(os.path.join(index_dic_path, hallu_dic, "paraphrasing_generate.json"), "r",encoding="utf-8") as r:
                 content_list = json.load(r)
@@ -382,6 +435,7 @@ class ExperimentRunner:
             effective_cnt = 0
             mr_satisfied_cnt = 0
             for item in content_list:
+                token_cnt += item["usage"][2] # token count
                 if type(item["mr_check"]) == bool:
                     effective_cnt += 1
                     if item["mr_check"]:
@@ -422,6 +476,8 @@ class ExperimentRunner:
         # if pred_true_cnt >= 1: pred_real_content["pred_flag"] = True
         with open(os.path.join(index_dic_path, "pred_real.json"), "w", encoding="utf-8") as w:
             json.dump(pred_real_content, w, indent=4)
+
+        return token_cnt
 
 
     def update_whole_pred_flag(self, index_dic_path, types_identify_qmr):
@@ -516,20 +572,9 @@ class ExperimentRunner:
         db_path = os.path.join(target_folder, db_file_new_name)
         shutil.copy(origin_db_path, db_path)
 
-        model_name_sql = self.model_name
-
-        gpt = GPTClient(
-            model_name=model_name_sql,
-            llm_type=self.llm_type,
-            temperature=temperature_,
-            api_key=os.getenv("OPENAI_API_KEY"),
-            api_base=os.getenv("OPENAI_API_BASE"),
-            url=self.url,
-            stream=self.stream
-        )
         db = SqliteConnector(db_path=db_path)
         prompt_generator = NumberSignCOTPrompt()
-        sql_gen = DefaultSQLGenerator(llm_client=gpt, db_connector=db, prompt_generator=prompt_generator, metadata=content)
+        sql_gen = DefaultSQLGenerator(llm_client=self.gpt_generating_component, db_connector=db, prompt_generator=prompt_generator, metadata=content)
         formatted_prompt = sql_gen.prompt_messages_construct()
         query, usage = sql_gen.generate_target_query()
         result, rowcount, err = sql_gen.execute_target_query()
@@ -539,18 +584,9 @@ class ExperimentRunner:
         return query, usage, (result, rowcount, err)
 
     def prompt_paraphasing(self, content, hallu_type) -> Tuple[List[str], List[str],dict]:
-        gpt = GPTClient(
-            model_name=self.model_name,
-            llm_type=self.llm_type,
-            temperature=self.temperature,
-            api_key=os.getenv("OPENAI_API_KEY"),
-            api_base=os.getenv("OPENAI_API_BASE"),
-            url=self.url,
-            stream=self.stream
-        )
         transformer = get_prompt_transformer_by_hallucination_type(
             hallu_type= hallu_type,
-            llm_client=gpt,
+            llm_client=self.gpt_prompt_paraphasing,
             n=self.n,
             metadata=content
         )

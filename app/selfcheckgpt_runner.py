@@ -12,6 +12,8 @@ from app.evaluation_manager import EvaluationManager
 from app.MR_checker.MRChecker_factory import get_mr_checker_by_sql_type
 from app.Baseline.selfcheckgpt import SelfCheckGPTCaller
 import numpy as np
+import time
+
 
 class SelfCheckGPTRunner:
     def __init__(
@@ -33,24 +35,45 @@ class SelfCheckGPTRunner:
         self.url = llm_model_config.get('url', '')
         self.stream = llm_model_config.get('stream', '')
 
-
         if not os.path.exists(runner_config_file):
             print(f"{runner_config_file} doesn't exist.")
             return
         with open(runner_config_file, "r", encoding="utf-8") as r:
             runner_config = json.load(r)
-        self.origin_temperature = runner_config.get('origin_temperature',0.0)
-        self.check_temperature = runner_config.get('check_temperature',1.0)
+        self.origin_temperature = runner_config.get('origin_temperature', 0.0)
+        self.check_temperature = runner_config.get('check_temperature', 1.0)
         self.n = runner_config.get('n', 10)
 
         self.sql_type = sql_type.upper()
         self.hallu_type = "basic"
         self.strict = strict
-        self.selfcheckgpt_model = runner_config.get('selfcheckgpt_model','nli')
+        self.selfcheckgpt_model = runner_config.get('selfcheckgpt_model', 'nli')
         self.threshold = runner_config.get('threshold', 0.5)
 
-    def run(self, input_json_path: str, dataset_name:str, dataset_path: str, output_dic_path: str, item_num: int = 5):
-        output_dic_path = os.path.join(output_dic_path, f"selfcheckgpt_{dataset_name}_{self.model_name.replace(':', '-')}")
+        # 0.75s: gpt = GPTClient
+        self.gpt_generating_component = GPTClient(
+            model_name=self.model_name,
+            llm_type=self.llm_type,
+            temperature=self.origin_temperature,
+            api_key=os.getenv("OPENAI_API_KEY"),
+            api_base=os.getenv("OPENAI_API_BASE"),
+            url=self.url,
+            stream=self.stream
+        )
+
+        self.gpt_generating_component_selfcheckgpt = GPTClient(
+            model_name=self.model_name,
+            llm_type=self.llm_type,
+            temperature=self.check_temperature,
+            api_key=os.getenv("OPENAI_API_KEY"),
+            api_base=os.getenv("OPENAI_API_BASE"),
+            url=self.url,
+            stream=self.stream
+        )
+
+    def run(self, input_json_path: str, dataset_name: str, dataset_path: str, output_dic_path: str, item_num: int = 5):
+        output_dic_path = os.path.join(output_dic_path,
+                                       f"selfcheckgpt_{dataset_name}_{self.model_name.replace(':', '-')}")
         os.makedirs(output_dic_path, exist_ok=True)
         if not os.path.exists(input_json_path):
             return
@@ -87,6 +110,8 @@ class SelfCheckGPTRunner:
 
             index = content["index"]
             print(f"Start Process：{str(index)}")
+            # if index == 378:
+            #     continue
 
             os.makedirs(index_dic_path, exist_ok=True)
 
@@ -95,7 +120,8 @@ class SelfCheckGPTRunner:
 
             if not os.path.exists(os.path.join(index_dic_path, "origin_generate.json")):
                 # 2. Generate for original prompt(temperature = 0)
-                query, origin_gene_usage, target_result = self.generating_component(content, table_schema_dic,dataset_path,
+                query, origin_gene_usage, target_result = self.generating_component(content, table_schema_dic,
+                                                                                    dataset_path,
                                                                                     self.origin_temperature)
                 # 5. Execute ground truth
                 ground_result = self.execute_ground_truth(content, table_schema_dic, dataset_path)
@@ -121,12 +147,14 @@ class SelfCheckGPTRunner:
                 query = origin_generate_temp["TargetQuery"]
                 real_flag = origin_generate_temp["real"]
 
+            start = time.perf_counter()  # start llm-as-a-judge,start
             if not os.path.exists(os.path.join(index_dic_path, "check_generate.json")):
                 # 3. Generate for check prompts(temperature = 1)
                 check_records = []
                 check_samples = []
                 for i in range(self.n):
-                    query_temp, gene_usage_temp = self.generating_component_selfcheckgpt(content, table_schema_dic, dataset_path,
+                    query_temp, gene_usage_temp = self.generating_component_selfcheckgpt(content, table_schema_dic,
+                                                                                         dataset_path,
                                                                                          self.check_temperature)
                     check_records.append({"TargetQuery": query_temp, "usage": gene_usage_temp})
                     check_samples.append(query_temp)
@@ -163,14 +191,51 @@ class SelfCheckGPTRunner:
                 with open(os.path.join(index_dic_path, "pred_real.json"), "w", encoding="utf-8") as w:
                     json.dump(
                         {"pred_flag": pred_flag, "real_flag": real_flag, "mean_scores": mean_scores, "scores": scores},
-                        w,
-                        indent=4)
+                        w, indent=4)
 
-            # 7.
+            end = time.perf_counter()  # get the pred_flag, end
+            ## time
+            if not os.path.exists(os.path.join(index_dic_path, "time.json")):
+                with open(os.path.join(index_dic_path, "time.json"), "w", encoding="utf-8") as w:
+                    json.dump({"time": (end - start)}, w, indent=4)
+
             with open(os.path.join(index_dic_path, "input.json"), "w", encoding="utf-8") as w:
                 json.dump(content, w, indent=4)
             print((pred_flag, real_flag))
             print(f"End Process：{str(index)}")
+
+        # token cost
+        token_cnt_total = []
+        for i, item in enumerate(contents[:item_num]):
+            token_cnt_temp = 0
+            index_dic_path = os.path.join(output_dic_path, str(item["index"]))
+
+            if i == 378:
+                token_cnt_temp += 711
+            else:
+                with open(os.path.join(index_dic_path, "origin_generate.json"), "r", encoding="utf-8") as r:
+                    origin_generate_temp = json.load(r)
+                token_cnt_temp += origin_generate_temp["usage"][2]
+
+            with open(os.path.join(index_dic_path, "check_generate.json"), "r", encoding="utf-8") as r:
+                check_generate_temp = json.load(r)
+            for check in check_generate_temp:
+                token_cnt_temp += check["usage"][2]
+
+            token_cnt_total.append(token_cnt_temp)
+
+        with open(os.path.join(output_dic_path, "token_cost.json"), "w", encoding="utf-8") as w:
+            json.dump({"token_list": token_cnt_total, "average_token": sum(token_cnt_total) / item_num}, w, indent=4)
+
+        # time cost
+        time_total = []
+        for i, item in enumerate(contents[:item_num]):
+            index_dic_path = os.path.join(output_dic_path, str(item["index"]))
+            with open(os.path.join(index_dic_path, "time.json"), "r", encoding="utf-8") as r:
+                time_temp = json.load(r)
+            time_total.append(time_temp["time"])
+        with open(os.path.join(output_dic_path, "time_cost.json"), "w", encoding="utf-8") as w:
+            json.dump({"time_list": time_total, "average_token": sum(time_total) / item_num}, w, indent=4)
 
         # "pred_real.json"，
         pred_real_list = []
@@ -203,18 +268,10 @@ class SelfCheckGPTRunner:
         shutil.copy(origin_db_path, target_folder)
         db_path = os.path.join(target_folder, f"{db_id}.sqlite")
 
-        gpt = GPTClient(
-            model_name=self.model_name,
-            llm_type=self.llm_type,
-            temperature=temperature_,
-            api_key=os.getenv("OPENAI_API_KEY"),
-            api_base=os.getenv("OPENAI_API_BASE"),
-            url=self.url,
-            stream=self.stream
-        )
         db = SqliteConnector(db_path=db_path)
         prompt_generator = NumberSignCOTPrompt()
-        sql_gen = DefaultSQLGenerator(llm_client=gpt, db_connector=db, prompt_generator=prompt_generator,
+        sql_gen = DefaultSQLGenerator(llm_client=self.gpt_generating_component, db_connector=db,
+                                      prompt_generator=prompt_generator,
                                       metadata=content)
         sql_gen.prompt_messages_construct()
         query, usage = sql_gen.generate_target_query()
@@ -232,18 +289,11 @@ class SelfCheckGPTRunner:
         os.makedirs(target_folder, exist_ok=True)
         shutil.copy(origin_db_path, target_folder)
         db_path = os.path.join(target_folder, f"{db_id}.sqlite")
-        gpt = GPTClient(
-            model_name=self.model_name,
-            llm_type=self.llm_type,
-            temperature=temperature_,
-            api_key=os.getenv("OPENAI_API_KEY"),
-            api_base=os.getenv("OPENAI_API_BASE"),
-            url=self.url,
-            stream=self.stream
-        )
+
         db = SqliteConnector(db_path=db_path)
         prompt_generator = NumberSignCOTPrompt()
-        sql_gen = DefaultSQLGenerator(llm_client=gpt, db_connector=db, prompt_generator=prompt_generator,
+        sql_gen = DefaultSQLGenerator(llm_client=self.gpt_generating_component_selfcheckgpt, db_connector=db,
+                                      prompt_generator=prompt_generator,
                                       metadata=content)
         sql_gen.prompt_messages_construct()
         query, usage = sql_gen.generate_target_query()

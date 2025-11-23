@@ -4,7 +4,8 @@ import argparse
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--llm_model_config_file", type=str, required=True)
+    parser.add_argument("--test_llm_model_config_file", type=str, required=True)
+    parser.add_argument("--judge_llm_model_config_file", type=str, required=True)
     parser.add_argument("--runner_config_file", type=str, required=True)
     parser.add_argument("--input_json", type=str, required=True)
     parser.add_argument("--dataset_name", type=str, required=True)
@@ -15,7 +16,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     runner = LLM_As_A_Judge_Runner(
-        llm_model_config_file=args.llm_model_config_file,
+        test_llm_model_config_file=args.test_llm_model_config_file,
+        judge_llm_model_config_file=args.judge_llm_model_config_file,
         runner_config_file = args.runner_config_file
     )
     runner.run(args.input_json, args.dataset_name, args.dataset_path, args.output_dic_path, args.num_examples)

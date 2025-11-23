@@ -1,0 +1,41 @@
+# 忽略虚拟环境
+.idea/
+.venv/
+.vscode/
+
+
+# 忽略 Python 编译文件
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# 忽略日志文件
+*.log
+
+# 忽略 Jupyter Notebook 的检查点
+.ipynb_checkpoints/
+
+# 忽略数据文件
+bird_data/
+bird_data_db_temp/
+spider_data/
+spider_data_db_temp/
+datasets/
+
+# 忽略config_my文件夹
+app/configs_my
+app/demo_code
+
+# 忽略实验结果文件
+HallucinationKnowledgeBase/
+BaselineResults/
+MRSQLGenResults
+
+Others/
+app/RunBaseline/
+app/RunExperiment/
+
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db

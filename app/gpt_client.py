@@ -27,18 +27,18 @@ class GPTClient:
     A wrapper around OpenAI chat completions with retry logic and internal logging."""
 
     def __init__(
-        self,
-        model_name: str = DEFAULT_MODEL,
-        llm_type: str = "general-purpose",
-        temperature: float = DEFAULT_TEMPERATURE,
-        api_key: str | None = None,
-        api_base: str | None = None,
-        url: str = "http://localhost:11436/api/chat",
-        stream: bool = False,
-        retry_cnt: int = DEFAULT_RETRY_CNT,
-        retry_delay: int = DEFAULT_RETRY_DELAY,
-        log_file: str = "gpt_client.log",
-        log_level: int = logging.DEBUG,
+            self,
+            model_name: str = DEFAULT_MODEL,
+            llm_type: str = "general-purpose",
+            temperature: float = DEFAULT_TEMPERATURE,
+            api_key: str | None = None,
+            api_base: str | None = None,
+            url: str = "http://localhost:11436/api/chat",
+            stream: bool = False,
+            retry_cnt: int = DEFAULT_RETRY_CNT,
+            retry_delay: int = DEFAULT_RETRY_DELAY,
+            log_file: str = "gpt_client.log",
+            log_level: int = logging.DEBUG,
     ) -> None:
         #
         # Initialize logger
@@ -75,9 +75,9 @@ class GPTClient:
         Internal method: initialize the logger"""
         logger = logging.getLogger("GPTClient")
         logger.setLevel(level)
-        logger.propagate = False  #  / Prevent duplicate log output
+        logger.propagate = False  # / Prevent duplicate log output
 
-        if not logger.handlers:  #  handler / Avoid adding handlers multiple times
+        if not logger.handlers:  # handler / Avoid adding handlers multiple times
             formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
             #
@@ -95,43 +95,63 @@ class GPTClient:
             logger.addHandler(sh)
 
         return logger
-
     def generate_general_llm(self, messages):
-        for attempt in range(1, self.retry_cnt + 1):
-            try:
-                #  OpenAI Chat API
-                # Call OpenAI chat API
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    temperature=self.temperature,
-                )
-                choice = response.choices[0]
-                usage = response.usage
-                return (
-                    choice.message.content,
-                    (
-                        usage.completion_tokens,
-                        usage.prompt_tokens,
-                        usage.total_tokens,
-                    ),
-                )
-            except Exception as e:
-                #
-                # Log error on exception
-                self.logger.error(
-                    "Attempt %d/%d: failed to call OpenAI API: %s",
-                    attempt,
-                    self.retry_cnt,
-                    e,
-                )
-                if attempt == self.retry_cnt:
-                    #
-                    # Raise the exception if all retries have failed
-                    raise
-                #
-                # Wait before next retry
-                time.sleep(self.retry_delay)
+        #  OpenAI Chat API
+        # Call OpenAI chat API
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            temperature=self.temperature,
+        )
+        choice = response.choices[0]
+        usage = response.usage
+        return (
+            choice.message.content,
+            (
+                usage.completion_tokens,
+                usage.prompt_tokens,
+                usage.total_tokens,
+            ),
+        )
+
+
+
+    # def generate_general_llm(self, messages):
+    #     for attempt in range(1, self.retry_cnt + 1):
+    #         try:
+    #             #  OpenAI Chat API
+    #             # Call OpenAI chat API
+    #             response = self.client.chat.completions.create(
+    #                 model=self.model_name,
+    #                 messages=messages,
+    #                 temperature=self.temperature,
+    #             )
+    #             choice = response.choices[0]
+    #             usage = response.usage
+    #             return (
+    #                 choice.message.content,
+    #                 (
+    #                     usage.completion_tokens,
+    #                     usage.prompt_tokens,
+    #                     usage.total_tokens,
+    #                 ),
+    #             )
+    #         except Exception as e:
+    #             #
+    #             # Log error on exception
+    #             self.logger.error(
+    #                 "general_llm Attempt %d/%d: failed to call OpenAI API: %s",
+    #                 attempt,
+    #                 self.retry_cnt,
+    #                 e,
+    #             )
+    #             if attempt == self.retry_cnt:
+    #                 #
+    #                 # Raise the exception if all retries have failed
+    #                 raise
+    #             #
+    #             # Wait before next retry
+    #             time.sleep(self.retry_delay)
 
     def generate_local_llm(self, messages):
         headers = {
@@ -146,10 +166,10 @@ class GPTClient:
             "stream": self.stream,
             "temperature": self.temperature
         }
-        
+
         for attempt in range(1, self.retry_cnt + 1):
             try:
-                completion_tokens = 0 
+                completion_tokens = 0
                 prompt_tokens = 0
                 total_tokens = 0
                 response = requests.post(self.url, headers=headers, json=item)
@@ -175,7 +195,7 @@ class GPTClient:
                 #
                 # Log error on exception
                 self.logger.error(
-                    "Attempt %d/%d: failed to call API: %s",
+                    "local_llm Attempt %d/%d: failed to call API: %s",
                     attempt,
                     self.retry_cnt,
                     e,
@@ -189,8 +209,8 @@ class GPTClient:
                 time.sleep(self.retry_delay)
 
     def generate(
-        self,
-        messages: List[dict],
+            self,
+            messages: List[dict],
     ) -> Tuple[str, Tuple[int, int, int]]:
         """
         Generate chat completion from input messages
@@ -204,7 +224,7 @@ class GPTClient:
                 -  / The generated text content
                 - token  (completion_tokens, prompt_tokens, total_tokens)   Token usage: completion, prompt, and total
         """
-        if self.llm_type.lower() == "local" :
+        if self.llm_type.lower() == "local":
             # ["deepseek-coder-v2:16b", "codellama:13b-instruct", "qwen2.5-coder:14b", "starcoder2:15b-instruct"]
             return self.generate_local_llm(messages)
         else:
