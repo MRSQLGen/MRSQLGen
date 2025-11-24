@@ -39,3 +39,9 @@ app/RunExperiment/
 # 忽略系统文件
 .DS_Store
 Thumbs.db
+
+# 忽略部分说明文档
+AttachedMaterials/
+MetamorphicRuls/Example
+
+.gitignore
